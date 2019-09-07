@@ -6,17 +6,19 @@
 #include<chrono>
 #include<thread>
 #include<mutex>
+#include<condition_variable>
 using namespace std;
 #define N_DIMENSIONS 2
 #define N_CENTROIDS 10
 #define SPACE_SIZE 1000
-#define N_THREADS 230
+#define N_THREADS 7
 
 // GLOBAL VARIABLE INITIALIZATION
 	//Point observations[SPACE_SIZE];	
 	//Point centroids[N_CENTROIDS];
 		
-mutex mutex_global_centroid;		
+mutex mutex_global_centroid;	
+condition_variable cv;	
 class Point
 {
 	private:
@@ -50,6 +52,19 @@ class Point
 	  void set_point(double v,int index)
 	  {
 	     dimensions[index] = v;
+	  }
+	 
+	  void sum_coordinates(double *v, int dim)
+	  {
+	  	int i = 0;
+	  	if(N_DIMENSIONS == dim)
+	  	{
+	  	  for(i=0;i<dim;++i)
+	  	  {
+	  	  	dimensions[i] = dimensions[i] + v[i];
+	  	  }
+	  	
+	  	}
 	  }
 	  double euclidean_distance(Point p)
 	  {
@@ -103,6 +118,15 @@ class CentroidHistory
     	double * getSumCoords()
     	{
     	  return sumCoords;
+    	}
+    	void increment_centroid_history(CentroidHistory c_p)
+    	{
+    		int i = 0;
+    		for(i=0;i<N_DIMENSIONS;++i)
+    		{
+    			sumCoords[i] = sumCoords[i] + c_p.getSumCoords()[i];
+    		}
+    		count = count + c_p.getCount();
     	}
     	
 };
@@ -242,14 +266,26 @@ void print_centroid(Point *centroids)
    	 	}
   	 }
 }
+
 Point cent [N_CENTROIDS];
+CentroidHistory global_history[N_CENTROIDS];
 int global_counter = 0;
+
+void clear_global_history()
+{
+	int i = 0;
+	for (i=0;i<N_DIMENSIONS;++i)
+	{
+		global_history[i].clear_history();
+	}
+}
 void call_from_thread(int tid,int st_p,int end_p,Point *observations,int count_ite) {
 	int min_distance = 0;
 	int index_min = 0;
 	int i = 0;
 	CentroidHistory history [N_CENTROIDS];
 	Point partial_cent[N_CENTROIDS];
+	unique_lock<mutex> lck (mutex_global_centroid,defer_lock);
     	while(count_ite < 10)
 	{	
 		for(i=0;i<SPACE_SIZE;i++)
@@ -259,14 +295,34 @@ void call_from_thread(int tid,int st_p,int end_p,Point *observations,int count_i
 				history[index_min].set_SumCoords(observations[i]);		
 		}
 
-		update_new_centroid(partial_cent,history);
+		//update_new_centroid(partial_cent,history);
 		count_ite++;
 		/// putting a barrier
-		mutex_global_centroid.lock()
+		//mutex_global_centroid.lock();
+		lck.lock();
+		global_counter++;
 		for(i=0;i<N_CENTROIDS;++i)
 		{
-			cent[i] = partial_
+			if(global_counter == N_THREADS)
+			{
+				global_history[i].increment_centroid_history(history[i]);
+				update_new_centroid(cent,global_history);
+				global_counter = 0;
+				clear_global_history();
+				cv.notify_all();
+				lck.unlock();
+			}
+			else
+			{
+				global_history[i].increment_centroid_history(history[i]);
+				cv.wait(lck);
+				lck.unlock();
+			}
+		
 		}
+		//mutex_global_centroid.lock();
+		
+		
 	}
      }
 
@@ -310,6 +366,18 @@ int main()
   int end_p = 0;
   for (int i = 0; i < N_THREADS; ++i) {
             
+            if(rest==0){
+            	if(i==0){
+            		st_p = 0;
+            	}
+            	else{
+            		st_p = end_p+1;
+            		
+            	}
+            	end_p = st_p +d-1; 
+            	cout << "st_p: " << st_p << "end_p: " << end_p; 
+            }else{
+            
             if(i<rest){
               if(i==0){
               st_p=0;
@@ -328,7 +396,7 @@ int main()
              	cout << "st_p: " << st_p << "end_p: " << end_p;
                 cout << "\n";
              }
-              
+              }
            
             // t[i] = std::thread(call_from_thread, st_p,end_p);
              //std:: cout << value;
