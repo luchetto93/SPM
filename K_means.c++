@@ -20,8 +20,10 @@ using namespace std;
 	//Point observations[SPACE_SIZE];	
 	//Point centroids[N_CENTROIDS];
 		
-mutex mutex_global_centroid;	
-condition_variable cv;	
+mutex mutex_global_centroid;
+mutex mutex_global_centroid_2;	
+condition_variable cv;
+condition_variable cv_2	
 class Point
 {
 	private:
@@ -276,16 +278,69 @@ void print_centroid(Point *centroids)
 Point cent [N_CENTROIDS];
 CentroidHistory global_history[N_CENTROIDS];
 int global_counter = 0;
-
+int global_counter_2 = 0;
 void clear_history(CentroidHistory *hist)
 {
 	int i = 0;
-	for (i=0;i<N_DIMENSIONS;++i)
-	{
-		hist[i].clear_history();
-	}
+  	for (i=0;i<N_DIMENSIONS;++i)
+ 	{ 
+ 	 	hist[i].clear_history();
+ 	}
 }
+CentroidHistory global_history_contiguos[N_CENTROIDS*N_THREADS];
+Point centroid_global_2[N_CENTROIDS];
+void call_from_thread_global_history(int tid,int st_p,int end_p,Point * observations,int K_Ite)
+{
+   // lock_free_solution
 
+	int i = 0;
+	int j = 0;
+	unique_lock<mutex> lck (mutex_global_centroid_2,defer_lock);
+	int partial_count = 0;
+	double partial_sum = [N_DIMENSIONS];
+	int incr = 0;
+   	while(count_ite < 10)
+	{	
+	   	clear_history(global_history_contiguos);
+		for(i=st_p;i<=end_p;i++)
+		{
+		  min_distance = 0;
+		  index_min = index_min_centroid(observations[i],cent);
+		  global_history_contiguos[(tid*N_CENTROIDS)+index_min].set_SumCoords(observations[i]);		
+		}
+		lck.lock();
+		global_counter_2++;
+		if(global_counter_2<N_THREADS)
+		{
+			cv_2.wait();
+		}
+		else
+		{
+		     for(j=0;j<N_CENTROIDS;j++){
+			for(i=0;i<N_THREADS;++i)
+			{
+			    partial_count = 0;
+			    for(k=0;k<N_DIMENSIONS;++k)
+			    {
+			    	partial_sum[k] = global_history_contiguos[i*N_CENTROIDS+j].getSumCoords()[k]
+			    if(k==0){
+			    partial_count = partial_count + global_history_contiguos[i*N_CENTROIDS+j].getCount();
+			    	}	
+			    
+			    }
+			}
+			for(k=0;k<N_DIMENSIONS;++k)
+			{
+				partial_sum[k] = partial_sum[k] / partial_count;
+				centroid_global_2.set_point(partial_sum[k],k);
+				partial_sum[k] = 0;
+			}
+			
+		  }
+		}
+	}
+	   			     
+}
 void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) {
 	int min_distance = 0;
 	int count_ite = 0;
@@ -304,7 +359,7 @@ void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) 
 				index_min = index_min_centroid(observations[i],cent);
 				history[index_min].set_SumCoords(observations[i]);		
 		}
-
+		
 		count_ite++;
 	
 		lck.lock();
@@ -326,7 +381,6 @@ void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) 
 		else
 		{
 			cv.wait(lck);
-		
 			lck.unlock();
 		}
 	
@@ -393,6 +447,15 @@ int main()
        cout << "\n";
     }
   sequential_Kmeans_computation(observations,centroids,history_centroid,10);
+  cout << "STAMPO CENT DOPO SEQUENTIAL:";
+  for(i=0;i<N_CENTROIDS;++i)
+    {
+       for(k=0;k<N_DIMENSIONS;++k)
+       {
+       		cout << cent[i].get_dimensions()[k] << "|";
+       }
+       cout << "\n";
+    }
   int d = SPACE_SIZE / N_THREADS;
   int rest = SPACE_SIZE % N_THREADS;
   int st_p = 0;
@@ -438,7 +501,8 @@ int main()
          }
           for (auto& th : threads_worker) {
         th.join();
-         cout << "sequential computation:";
+        }
+	        cout << "sequential computation:";
   for(i=0;i<N_CENTROIDS;++i)
     {
        for(k=0;k<N_DIMENSIONS;++k)
@@ -447,16 +511,7 @@ int main()
        }
        cout << "\n";
     }
-                cout << "parallel_computation:";
-  for(i=0;i<N_CENTROIDS;++i)
-    {
-       for(k=0;k<N_DIMENSIONS;++k)
-       {
-       		cout << cent[i].get_dimensions()[k] << "|";
-       }
-       cout << "\n";
-    }
-    }
+    
    
 }
 
