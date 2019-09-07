@@ -4,8 +4,11 @@
 #include <math.h>
 #include<fstream>
 #include<chrono>
+#include<unistd.h>
 #include<thread>
 #include<mutex>
+#include<time.h>
+#include<vector>
 #include<condition_variable>
 using namespace std;
 #define N_DIMENSIONS 2
@@ -37,6 +40,7 @@ class Point
 	  {
 	     return index_in_dimensions;
 	  }
+	
 	  void set_dimensions(double v)
 	  {
 	   if(index_in_dimensions<N_DIMENSIONS)
@@ -69,9 +73,9 @@ class Point
 	  double euclidean_distance(Point p)
 	  {
 	    int i = 0;
-	    double euclidean_distance = 0;
+
 	    double sum = 0;
-	    double appo = 0;
+
 	    for(i=0;i<N_DIMENSIONS;i++)
 	    { 
 	    		sum = sum + (dimensions[i] - p.dimensions[i])*(dimensions[i] - p.dimensions[i]);
@@ -153,12 +157,12 @@ int index_min_centroid(Point p, Point *centroids)
     	    closest_index = i;
     	 }
     }
+    //cout << "Cvalue by =::" << closest_index;
     return closest_index;
 
 }
 void update_new_centroid(Point *centroids, CentroidHistory *history)
 {
-	cout << "COMPUTO";
 	int i = 0;
 	int j = 0;
 	double average = 0;
@@ -200,6 +204,7 @@ void sequential_Kmeans_computation(Point *observations,Point *centroids,Centroid
 		{
 				min_distance = 0;
 				index_min = index_min_centroid(observations[i],centroids);
+				//cout << "min:" << index_min;
 				history[index_min].set_SumCoords(observations[i]);		
 		}
 
@@ -236,6 +241,7 @@ void generate_random_centroid(Point observations[SPACE_SIZE],Point centroids[N_C
 {
 	int v[SPACE_SIZE];
 	int i = 0;
+	srand(time(NULL));
 	for (i=0;i<SPACE_SIZE;++i)
 	{
 		v[i] = i;
@@ -271,61 +277,75 @@ Point cent [N_CENTROIDS];
 CentroidHistory global_history[N_CENTROIDS];
 int global_counter = 0;
 
-void clear_global_history()
+void clear_history(CentroidHistory *hist)
 {
 	int i = 0;
 	for (i=0;i<N_DIMENSIONS;++i)
 	{
-		global_history[i].clear_history();
+		hist[i].clear_history();
 	}
 }
-void call_from_thread(int tid,int st_p,int end_p,Point *observations,int count_ite) {
+
+void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) {
 	int min_distance = 0;
+	int count_ite = 0;
 	int index_min = 0;
 	int i = 0;
 	CentroidHistory history [N_CENTROIDS];
 	Point partial_cent[N_CENTROIDS];
 	unique_lock<mutex> lck (mutex_global_centroid,defer_lock);
+	clear_history(global_history);
     	while(count_ite < 10)
 	{	
-		for(i=0;i<SPACE_SIZE;i++)
+		clear_history(history);
+		for(i=st_p;i<=end_p;i++)
 		{
 				min_distance = 0;
 				index_min = index_min_centroid(observations[i],cent);
 				history[index_min].set_SumCoords(observations[i]);		
 		}
 
-		//update_new_centroid(partial_cent,history);
 		count_ite++;
-		/// putting a barrier
-		//mutex_global_centroid.lock();
+	
 		lck.lock();
+		
 		global_counter++;
 		for(i=0;i<N_CENTROIDS;++i)
 		{
-			if(global_counter == N_THREADS)
-			{
-				global_history[i].increment_centroid_history(history[i]);
-				update_new_centroid(cent,global_history);
-				global_counter = 0;
-				clear_global_history();
-				cv.notify_all();
-				lck.unlock();
-			}
-			else
-			{
-				global_history[i].increment_centroid_history(history[i]);
-				cv.wait(lck);
-				lck.unlock();
-			}
-		
+			global_history[i].increment_centroid_history(history[i]);
 		}
-		//mutex_global_centroid.lock();
+		if(global_counter == N_THREADS)
+		{
 		
+		  update_new_centroid(cent,global_history);
+		  clear_history(global_history);
+		  cv.notify_all();
+		  global_counter = 0;
+		  lck.unlock();
+		}
+		else
+		{
+			cv.wait(lck);
 		
+			lck.unlock();
+		}
+	
 	}
-     }
 
+	return;
+     }
+void create_copy_centroid(Point *centroid)
+{
+   int i = 0;
+   int k = 0;
+   for(i=0;i<N_CENTROIDS;++i)
+   {
+   	for(k=0;k<N_DIMENSIONS;++k)
+   	{
+   		centroid[i].set_point(cent[i].get_dimensions()[k],k);
+   	}
+   }
+}
 int main()
 {
 	Point p1;
@@ -356,14 +376,29 @@ int main()
   double *v; 
   v = observations[990].get_dimensions();
   //cout << v[0] << v[1];
-  generate_random_centroid(observations,centroids);
+  generate_random_centroid(observations,cent);
+  
   double *v1 = centroids[1].get_dimensions();
   cout << v1[0] << "-" << v1[1];
-  //sequential_Kmeans_computation(observations,centroids,history_centroid,10);
+  
+  create_copy_centroid(centroids);
+  int k = 0;
+  cout << "STAMPO CENTROIDS:";
+  for(i=0;i<N_CENTROIDS;++i)
+    {
+       for(k=0;k<N_DIMENSIONS;++k)
+       {
+       		cout << centroids[i].get_dimensions()[k] << "|";
+       }
+       cout << "\n";
+    }
+  sequential_Kmeans_computation(observations,centroids,history_centroid,10);
   int d = SPACE_SIZE / N_THREADS;
   int rest = SPACE_SIZE % N_THREADS;
   int st_p = 0;
   int end_p = 0;
+  vector<thread> threads_worker(N_THREADS);
+
   for (int i = 0; i < N_THREADS; ++i) {
             
             if(rest==0){
@@ -375,7 +410,7 @@ int main()
             		
             	}
             	end_p = st_p +d-1; 
-            	cout << "st_p: " << st_p << "end_p: " << end_p; 
+            	//cout << "st_p: " << st_p << "end_p: " << end_p; 
             }else{
             
             if(i<rest){
@@ -387,19 +422,41 @@ int main()
                st_p = end_p+1;
                }
                end_p = st_p + d; 
-               cout << "st_p: " << st_p << "end_p: " << end_p;
-               cout << "\n";
+               //cout << "st_p: " << st_p << "end_p: " << end_p;
+               //cout << "\n";
              }
              else{
              	st_p = end_p+1;
              	end_p = st_p + d-1; 
-             	cout << "st_p: " << st_p << "end_p: " << end_p;
-                cout << "\n";
+             	//cout << "st_p: " << st_p << "end_p: " << end_p;
+                //cout << "\n";
              }
               }
-           
-            // t[i] = std::thread(call_from_thread, st_p,end_p);
-             //std:: cout << value;
+      
+  
+         threads_worker[i] = thread(call_from_thread,i,st_p,end_p,observations,10);
          }
+          for (auto& th : threads_worker) {
+        th.join();
+         cout << "sequential computation:";
+  for(i=0;i<N_CENTROIDS;++i)
+    {
+       for(k=0;k<N_DIMENSIONS;++k)
+       {
+       		cout << centroids[i].get_dimensions()[k] << "|";
+       }
+       cout << "\n";
+    }
+                cout << "parallel_computation:";
+  for(i=0;i<N_CENTROIDS;++i)
+    {
+       for(k=0;k<N_DIMENSIONS;++k)
+       {
+       		cout << cent[i].get_dimensions()[k] << "|";
+       }
+       cout << "\n";
+    }
+    }
+   
 }
 
