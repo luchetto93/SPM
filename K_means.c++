@@ -10,12 +10,12 @@
 #include<time.h>
 #include<vector>
 #include<condition_variable>
-using namespace std;
 #define N_DIMENSIONS 2
 #define N_CENTROIDS 10
-#define SPACE_SIZE 1000
+#define SPACE_SIZE 300000
 #define N_THREADS 7
-
+#define X 2.0
+using namespace std;
 // GLOBAL VARIABLE INITIALIZATION
 	//Point observations[SPACE_SIZE];	
 	//Point centroids[N_CENTROIDS];
@@ -23,7 +23,7 @@ using namespace std;
 mutex mutex_global_centroid;
 mutex mutex_global_centroid_2;	
 condition_variable cv;
-condition_variable cv_2	
+condition_variable cv_2;
 class Point
 {
 	private:
@@ -91,16 +91,22 @@ class CentroidHistory
     private:
     	double sumCoords[N_DIMENSIONS];
     	int count;
-    
+    	int involved = 0;
     public: 
       CentroidHistory()
       {
       	count = 0;
+      	involved = 0;
+      }
+      int get_involved()
+      {
+       return involved;
       }
       void clear_history()
       {
         int i = 0;
         count = 0;
+        involved = 0;
         for (i=0;i<N_DIMENSIONS;++i)
         {
            sumCoords[i] = 0;
@@ -111,11 +117,12 @@ class CentroidHistory
     	{
     			int i  = 0;
     			count++;
+    			involved = 1;
     			for(i=0;i<N_DIMENSIONS;i++)
     			{
     			   sumCoords[i] = sumCoords[i] + p.get_dimensions()[i];
-    			   
     			}
+    			
     	}
     	double getCount()
     	{
@@ -128,7 +135,7 @@ class CentroidHistory
     	void increment_centroid_history(CentroidHistory c_p)
     	{
     		int i = 0;
-    		for(i=0;i<N_DIMENSIONS;++i)
+    		for(i=0;i<N_DIMENSIONS;i++)
     		{
     			sumCoords[i] = sumCoords[i] + c_p.getSumCoords()[i];
     		}
@@ -173,6 +180,7 @@ void update_new_centroid(Point *centroids, CentroidHistory *history)
 		average = 0;
 	  	for(j=0;j<N_DIMENSIONS;j++)
 	  	{
+
 	  	     if(history[i].getCount()>0)
 	  	     {
 	  	         average = history[i].getSumCoords()[j] /history[i].getCount();
@@ -204,15 +212,15 @@ void sequential_Kmeans_computation(Point *observations,Point *centroids,Centroid
 	{	
 		for(i=0;i<SPACE_SIZE;i++)
 		{
-				min_distance = 0;
-				index_min = index_min_centroid(observations[i],centroids);
-				//cout << "min:" << index_min;
-				history[index_min].set_SumCoords(observations[i]);		
+		 		min_distance = 0;
+		 		index_min = index_min_centroid(observations[i],centroids);
+		 		//cout << "min:" << index_min;
+		 		history[index_min].set_SumCoords(observations[i]);		
 		}
-
+		 		
 		update_new_centroid(centroids,history);
 		count_ite++;
-	}	
+	}	 
 }
 Point * generate_random_centroid2(Point observations[SPACE_SIZE],Point centroids[N_CENTROIDS])
 {
@@ -282,7 +290,7 @@ int global_counter_2 = 0;
 void clear_history(CentroidHistory *hist)
 {
 	int i = 0;
-  	for (i=0;i<N_DIMENSIONS;++i)
+  	for (i=0;i<N_CENTROIDS;++i)
  	{ 
  	 	hist[i].clear_history();
  	}
@@ -291,56 +299,72 @@ CentroidHistory global_history_contiguos[N_CENTROIDS*N_THREADS];
 Point centroid_global_2[N_CENTROIDS];
 void call_from_thread_global_history(int tid,int st_p,int end_p,Point * observations,int K_Ite)
 {
-   // lock_free_solution
-
 	int i = 0;
 	int j = 0;
 	unique_lock<mutex> lck (mutex_global_centroid_2,defer_lock);
 	int partial_count = 0;
-	double partial_sum = [N_DIMENSIONS];
+	double partial_sum [N_DIMENSIONS];
 	int incr = 0;
-   	while(count_ite < 10)
+	int count_ite = 0;
+	int k = 0;
+	int min_distance = 0;
+	int index_min = 0;
+	//clear_history(global_history_contiguos);
+	while(count_ite < 10)
 	{	
-	   	clear_history(global_history_contiguos);
-		for(i=st_p;i<=end_p;i++)
+	   	
+		for(i=st_p;i<=end_p;++i)
 		{
 		  min_distance = 0;
-		  index_min = index_min_centroid(observations[i],cent);
+		  index_min = index_min_centroid(observations[i],centroid_global_2);
 		  global_history_contiguos[(tid*N_CENTROIDS)+index_min].set_SumCoords(observations[i]);		
 		}
 		lck.lock();
 		global_counter_2++;
-		if(global_counter_2<N_THREADS)
-		{
-			cv_2.wait();
-		}
+		if(global_counter_2 < N_THREADS)
+		{  		  		 
+		  	cv_2.wait(lck);
+		  	lck.unlock();
+		} 
 		else
-		{
+		{ 
+	// REDUCE 
 		     for(j=0;j<N_CENTROIDS;j++){
-			for(i=0;i<N_THREADS;++i)
-			{
-			    partial_count = 0;
-			    for(k=0;k<N_DIMENSIONS;++k)
-			    {
-			    	partial_sum[k] = global_history_contiguos[i*N_CENTROIDS+j].getSumCoords()[k]
+		  	for(i=0;i<N_THREADS;++i)
+		   	{
+		   	    partial_count = 0;
+		   	    for(k=0;k<N_DIMENSIONS;++k)
+		   	    {
+			    	partial_sum[k] = global_history_contiguos[(i*N_CENTROIDS)+j].getSumCoords()[k];
 			    if(k==0){
-			    partial_count = partial_count + global_history_contiguos[i*N_CENTROIDS+j].getCount();
+			    partial_count = partial_count + global_history_contiguos[(i*N_CENTROIDS)+j].getCount();
 			    	}	
 			    
 			    }
 			}
-			for(k=0;k<N_DIMENSIONS;++k)
+		      for(k=0;k<N_DIMENSIONS;++k)
 			{
 				partial_sum[k] = partial_sum[k] / partial_count;
-				centroid_global_2.set_point(partial_sum[k],k);
+				centroid_global_2[j].set_point(partial_sum[k],k);
 				partial_sum[k] = 0;
 			}
 			
 		  }
+		  cv_2.notify_all();
+		  global_counter_2 = 0;
+		  //cout << "wake-up!!!!" << "\n";
+		  for (i=0;i<N_THREADS*N_CENTROIDS;++i)
+ 		  { 
+ 	 		global_history_contiguos[i].clear_history();
+ 		  }
+		  lck.unlock();
 		}
+		
+	count_ite++;	
 	}
-	   			     
+	return;
 }
+
 void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) {
 	int min_distance = 0;
 	int count_ite = 0;
@@ -349,41 +373,36 @@ void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) 
 	CentroidHistory history [N_CENTROIDS];
 	Point partial_cent[N_CENTROIDS];
 	unique_lock<mutex> lck (mutex_global_centroid,defer_lock);
-	clear_history(global_history);
+	//clear_history(history);  LASCIALA FORSE UN GIORNO LA CAPIRÒ !!!!!
     	while(count_ite < 10)
 	{	
-		clear_history(history);
 		for(i=st_p;i<=end_p;i++)
 		{
 				min_distance = 0;
 				index_min = index_min_centroid(observations[i],cent);
 				history[index_min].set_SumCoords(observations[i]);		
 		}
-		
-		count_ite++;
-	
 		lck.lock();
-		
 		global_counter++;
-		for(i=0;i<N_CENTROIDS;++i)
+		for(i=0;i<N_CENTROIDS;i++)
 		{
-			global_history[i].increment_centroid_history(history[i]);
+				global_history[i].increment_centroid_history(history[i]);
+				history[i].clear_history();
 		}
 		if(global_counter == N_THREADS)
 		{
-		
+		  
 		  update_new_centroid(cent,global_history);
-		  clear_history(global_history);
-		  cv.notify_all();
 		  global_counter = 0;
+		  cv.notify_all();
 		  lck.unlock();
 		}
 		else
-		{
+		{	
 			cv.wait(lck);
 			lck.unlock();
 		}
-	
+	count_ite++;
 	}
 
 	return;
@@ -400,12 +419,8 @@ void create_copy_centroid(Point *centroid)
    	}
    }
 }
-int main()
+void read_from_file(Point *observations)
 {
-	Point p1;
-	Point observations[SPACE_SIZE];
-	Point centroids[N_CENTROIDS];
-	CentroidHistory history_centroid[N_CENTROIDS]; // each thread will have a CentroidHistory, where it stores the local computation. centroids stored [0,1,2,.....,N]
 	string line;
 	float v_1;
       	float v_2;
@@ -425,19 +440,40 @@ int main()
     		}
     		myfile.close();
   	}
-
-  else cout << "Unable to open file";
-  double *v; 
-  v = observations[990].get_dimensions();
-  //cout << v[0] << v[1];
-  generate_random_centroid(observations,cent);
-  
-  double *v1 = centroids[1].get_dimensions();
-  cout << v1[0] << "-" << v1[1];
-  
-  create_copy_centroid(centroids);
+}
+static const int num_threads = 4;
+int value = 4;
+void generate_random_observations(Point *observations)
+{
+	double x = 0;
+	double y = 0;
+	int i = 0;
+     	for(i=0;i<SPACE_SIZE;i++)
+     	{
+     	  x = static_cast <double> (rand()) / (static_cast <double> (RAND_MAX/X));
+     	  y = static_cast <double> (rand()) / (static_cast <double> (RAND_MAX/X));
+     	  Point new_p;
+     	  new_p.set_dimensions(N_DIMENSIONS);
+     	  new_p.set_point(x,0);
+     	  new_p.set_point(y,0);
+     	  observations[i] = new_p;
+     	}
+     	
+}
+int main()
+{	int i = 0;
+	Point p1;
+	Point observations[SPACE_SIZE];
+	Point centroids[N_CENTROIDS];
+	CentroidHistory history_centroid[N_CENTROIDS]; // each thread will have a CentroidHistory, where it stores the local computation. centroids stored [0,1,2,.....,N]
+	generate_random_observations(observations);
+  	generate_random_centroid(observations,cent);
+	create_copy_centroid(centroids);
+  	create_copy_centroid(centroid_global_2);
   int k = 0;
-  cout << "STAMPO CENTROIDS:";
+
+  sequential_Kmeans_computation(observations,centroids,history_centroid,10);
+  	        cout << "sequential computation:";
   for(i=0;i<N_CENTROIDS;++i)
     {
        for(k=0;k<N_DIMENSIONS;++k)
@@ -446,22 +482,12 @@ int main()
        }
        cout << "\n";
     }
-  sequential_Kmeans_computation(observations,centroids,history_centroid,10);
-  cout << "STAMPO CENT DOPO SEQUENTIAL:";
-  for(i=0;i<N_CENTROIDS;++i)
-    {
-       for(k=0;k<N_DIMENSIONS;++k)
-       {
-       		cout << cent[i].get_dimensions()[k] << "|";
-       }
-       cout << "\n";
-    }
   int d = SPACE_SIZE / N_THREADS;
   int rest = SPACE_SIZE % N_THREADS;
   int st_p = 0;
   int end_p = 0;
   vector<thread> threads_worker(N_THREADS);
-
+  clear_history(global_history);
   for (int i = 0; i < N_THREADS; ++i) {
             
             if(rest==0){
@@ -473,7 +499,6 @@ int main()
             		
             	}
             	end_p = st_p +d-1; 
-            	//cout << "st_p: " << st_p << "end_p: " << end_p; 
             }else{
             
             if(i<rest){
@@ -485,14 +510,58 @@ int main()
                st_p = end_p+1;
                }
                end_p = st_p + d; 
-               //cout << "st_p: " << st_p << "end_p: " << end_p;
-               //cout << "\n";
+
              }
              else{
              	st_p = end_p+1;
              	end_p = st_p + d-1; 
-             	//cout << "st_p: " << st_p << "end_p: " << end_p;
-                //cout << "\n";
+
+             }
+              }
+      
+  
+         threads_worker[i] = thread(call_from_thread_global_history,i,st_p,end_p,observations,10);
+         }
+          for (auto& th : threads_worker) {
+        th.join();
+        }
+	         	        cout << "parallel computation GLOBAL STRUCTURE UNIQUE";
+  for(i=0;i<N_CENTROIDS;++i)
+    {
+       for(k=0;k<N_DIMENSIONS;++k)
+       {
+       		cout << centroid_global_2[i].get_dimensions()[k] << "|";
+       }
+       cout << "\n";
+    }
+     for (int i = 0; i < N_THREADS; ++i) {
+            
+            if(rest==0){
+            	if(i==0){
+            		st_p = 0;
+            	}
+            	else{
+            		st_p = end_p+1;
+            		
+            	}
+            	end_p = st_p +d-1; 
+            }else{
+            
+            if(i<rest){
+              if(i==0){
+              st_p=0;
+              }
+              else
+              {
+               st_p = end_p+1;
+               }
+               end_p = st_p + d; 
+
+             }
+             else{
+             	st_p = end_p+1;
+             	end_p = st_p + d-1; 
+
              }
               }
       
@@ -502,16 +571,7 @@ int main()
           for (auto& th : threads_worker) {
         th.join();
         }
-	        cout << "sequential computation:";
-  for(i=0;i<N_CENTROIDS;++i)
-    {
-       for(k=0;k<N_DIMENSIONS;++k)
-       {
-       		cout << centroids[i].get_dimensions()[k] << "|";
-       }
-       cout << "\n";
-    }
-    
-   
+  
+  
 }
 
