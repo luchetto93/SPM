@@ -8,13 +8,15 @@
 #include<thread>
 #include<mutex>
 #include<time.h>
+#include <ff/parallel_for.hpp>
 #include<vector>
 #include<condition_variable>
 #define N_DIMENSIONS 2
 #define N_CENTROIDS 10
-#define SPACE_SIZE 300000
-#define N_THREADS 10
+#define SPACE_SIZE 500000
+#define N_THREADS 100
 #define X 2.0
+using namespace ff;
 using namespace std;
 // GLOBAL VARIABLE INITIALIZATION
 	//Point observations[SPACE_SIZE];	
@@ -166,7 +168,6 @@ int index_min_centroid(Point p, Point *centroids)
     	    closest_index = i;
     	 }
     }
-    //cout << "Cvalue by =::" << closest_index;
     return closest_index;
 
 }
@@ -208,13 +209,13 @@ void sequential_Kmeans_computation(Point *observations,Point *centroids,Centroid
 		double distance = 0;
 		int index_min = 0;
 		int k = 0;
-	while(count_ite < 10)
+	while(count_ite < K_ite)
 	{	
 		for(i=0;i<SPACE_SIZE;i++)
 		{
 		 		min_distance = 0;
 		 		index_min = index_min_centroid(observations[i],centroids);
-		 		//cout << "min:" << index_min;
+
 		 		history[index_min].set_SumCoords(observations[i]);		
 		}
 		 		
@@ -249,7 +250,9 @@ Point * generate_random_centroid2(Point observations[SPACE_SIZE],Point centroids
 }
 Point cent [N_CENTROIDS];
 Point centroid_global_2[N_CENTROIDS];
+Point centroid_fastflow[N_CENTROIDS];
 CentroidHistory global_history[N_CENTROIDS];
+CentroidHistory history_fastflow[N_CENTROIDS];
 int global_counter = 0;
 int global_counter_2 = 0;
 void generate_random_centroid(Point observations[SPACE_SIZE],int *indexes,Point *cen)
@@ -275,6 +278,7 @@ void generate_random_centroid(Point observations[SPACE_SIZE],int *indexes,Point 
 		//cen[i] = observations[indexes[i]];
 		centroid_global_2[i] = observations[indexes[i]];
 		cent[i] = observations[indexes[i]];
+		centroid_fastflow[i] = observations[indexes[i]];
 	}
 }
 void print_centroid(Point *centroids)
@@ -315,16 +319,15 @@ void call_from_thread_global_history(int tid,int st_p,int end_p,Point * observat
 	int k = 0;
 	int min_distance = 0;
 	int index_min = 0;
-
+	
 	while(count_ite < 10)
 	{	
 	   	 
-	   	 
-		for(i=st_p;i<=end_p;++i)
+	   	for(i=st_p;i<=end_p;++i)
 		{
 		  min_distance = 0;
 		  index_min = index_min_centroid(observations[i],centroid_global_2);
-		 
+		  
 		  global_history_contiguos[(tid*N_CENTROIDS)+index_min].set_SumCoords(observations[i]);		
 		}
 		lck.lock();
@@ -349,7 +352,6 @@ void call_from_thread_global_history(int tid,int st_p,int end_p,Point * observat
 			     
 			    }
 			    partial_count = partial_count + global_history_contiguos[(i*N_CENTROIDS)+j].getCount();
-			    
 			}
 		      for(k=0;k<N_DIMENSIONS;++k)
 			{
@@ -363,7 +365,6 @@ void call_from_thread_global_history(int tid,int st_p,int end_p,Point * observat
 		  
 
 		  global_counter_2 = 0;
-		  //cout << "wake-up!!!!" << "\n";
 		  for (i=0;i<N_THREADS*N_CENTROIDS;++i)
  		  { 
  	 		global_history_contiguos[i].clear_history();
@@ -385,7 +386,7 @@ void call_from_thread(int tid,int st_p,int end_p,Point *observations,int K_Ite) 
 	CentroidHistory history [N_CENTROIDS];
 	Point partial_cent[N_CENTROIDS];
 	unique_lock<mutex> lck (mutex_global_centroid,defer_lock);
-	//clear_history(history);  LASCIALA FORSE UN GIORNO LA CAPIRÒ !!!!!
+	clear_history(history);  //LASCIALA FORSE UN GIORNO LA CAPIRÒ !!!!!
     	while(count_ite < 10)
 	{	
 		for(i=st_p;i<=end_p;i++)
@@ -484,8 +485,76 @@ void copy_in_centroid_global_2()
    	}
    }
 }
+void fast_flow_parallel_reduce(Point *observations, Point *centroids, int k_ite)
+{
+	int i = 0;
+	int iteration = 0;
+	int j = 0;
+	int k = 0;
+	int min_distance = 0;
+	int index_min = 0;
+	double partial_sum[2];
+	int partial_count = 0;
+  	int nworkers = ff_realNumCores();
+  	ParallelFor pf( ff_realNumCores() );
+  	CentroidHistory globalcentroid_fastflow[nworkers*N_CENTROIDS];
+  	for(i=0;i<nworkers*N_CENTROIDS;i++)
+  	{
+  	  globalcentroid_fastflow[i].clear_history();
+  	}	
+	while(iteration < 10)
+	{
+	  pf.parallel_for_idx(0,SPACE_SIZE,1,30000,[&iteration,&observations,&centroids,&globalcentroid_fastflow,&nworkers](const long start, const long end, const long thid) {
+      	      
+      	        for (long j=start; j<end; j++) {
+      	        	int min_distance = 0;
+      	        	int index_min = 0;
+    			//std:: cout << "TID:" << thid <<"Array: " << A[j] << "\n";
+                    for(int c = 0; c < N_CENTROIDS;c++)
+                    {		    	
+                       		min_distance = 0;
+		 		index_min = index_min_centroid(observations[j],centroids);
+		 		globalcentroid_fastflow[(thid*nworkers)+c].set_SumCoords(observations[j]);
+                    }               
+      		}		    	
+    		},nworkers);	  
+    		//std::cout << "FACCIO REDUCE!!!" << "\n";
+		// REDUCE implementa qui !!!!!!!!!!!!!!	
+		  for(j=0;j<N_CENTROIDS;j++){
+		  	for(i=0;i<nworkers;++i)
+		   	{
+		   	    partial_count = 0;
+		   	    for(k=0;k<N_DIMENSIONS;++k)
+		   	    {
+			    	partial_sum[k] =  partial_sum[k] + globalcentroid_fastflow[(i*N_CENTROIDS)+j].getSumCoords()[k];
+			    	}	
+			     
+			    }
+			    partial_count = partial_count + globalcentroid_fastflow[(i*N_CENTROIDS)+j].getCount();
+			}
+		      for(k=0;k<N_DIMENSIONS;++k)
+			{
+			    if(partial_count >0){
+				partial_sum[k] = partial_sum[k] / partial_count;
+				centroids[j].set_point(partial_sum[k],k);
+				partial_sum[k] = 0;
+				}
+			}
+		  	
+		  
+		  for (i=0;i<nworkers*N_CENTROIDS;++i)
+ 		  { 
+ 	 		globalcentroid_fastflow[i].clear_history();
+ 		  }
+
+
+	  iteration++;
+	}
+}
 int main()
-{	int i = 0;
+{	
+	srand (time(NULL));
+	int i = 0;
 	int centroid_idx[N_CENTROIDS] = {100,120,5000,8000,12000,11235,19234,17654,23456,25000};
 	Point p1;
 	CentroidHistory history_centroid[N_CENTROIDS];
@@ -497,15 +566,19 @@ int main()
 	create_copy_centroid(centroid_seq);
   	//copy_in_centroid_global_2();
 
+	for(i=0;i<N_THREADS*N_CENTROIDS;i++)
+	{
+		global_history_contiguos[i].clear_history();
+	}
   	auto start = chrono::high_resolution_clock::now();
   	sequential_Kmeans_computation(observations,centroid_seq,history_centroid,10);
   	
  
   	auto finish = chrono::high_resolution_clock::now();
 	chrono::duration<double> elapsed = finish - start;
-	cout << "Elapsed time: " << elapsed.count() << " s\n";
+	cout << "Elapsed time sequential: " << elapsed.count() << " s\n";
 
- 
+  
   int d = SPACE_SIZE / N_THREADS;
   int rest = SPACE_SIZE % N_THREADS;
   int st_p = 0;
@@ -513,6 +586,7 @@ int main()
   vector<thread> threads_worker(N_THREADS);
   clear_history(global_history);
   auto start1 = std::chrono::high_resolution_clock::now();
+ 
   for (int i = 0; i < N_THREADS; ++i) {
             
             if(rest==0){
@@ -550,34 +624,35 @@ int main()
           for (auto& th : threads_worker) {
        th.join();
        }
- 	
+   
      auto finish1 = chrono::high_resolution_clock::now();
-     chrono::duration<double> elapsed2 = finish1 - start1;
-     cout << "Elapsed time second: " << elapsed2.count() << " s\n";
-     cout << "parallel computation GLOBAL solution 2:";
+     chrono::duration<double> elapsed1 = finish1 - start1;
+     cout << "Elapsed time second: PARALLE-REDUCE" << elapsed1.count() << " s\n";
+  //   cout << "parallel computation GLOBAL solution 2:";
      
        
        
      
-  	         	        cout << "sequential computation:";
-  for(i=0;i<N_CENTROIDS;++i)
-    {
-       for(k=0;k<N_DIMENSIONS;++k)
-       {
-       		cout << centroid_seq[i].get_dimensions()[k] << "|";
-       }
-       cout << "\n";
-    }
+  //	         	        cout << "sequential computation:";
+//  for(i=0;i<N_CENTROIDS;++i)
+ //   {
+  //     for(k=0;k<N_DIMENSIONS;++k)
+  //     {
+   //    		cout << centroid_seq[i].get_dimensions()[k] << "|";
+ //      }
+   //    cout << "\n";
+ //   }
   
-         	        cout << "parallel_comput computation:";
-  for(i=0;i<N_CENTROIDS;++i)
-    {
-       for(k=0;k<N_DIMENSIONS;++k)
-       {
-       		cout << centroid_global_2[i].get_dimensions()[k] << "|";
-       }
-       cout << "\n";
-    }
+    //     	        cout << "parallel_comput computation:";
+ // for(i=0;i<N_CENTROIDS;++i)
+   // {
+      // for(k=0;k<N_DIMENSIONS;++k)
+    //   {
+       //		cout << centroid_global_2[i].get_dimensions()[k] << "|";
+     //  }
+   //    cout << "\n";
+ //   }
+     auto start2 = chrono::high_resolution_clock::now();
      for (int i = 0; i < N_THREADS; ++i) {
             
             if(rest==0){
@@ -610,29 +685,35 @@ int main()
               }
       
   
-       //  threads_worker[i] = thread(call_from_thread,i,st_p,end_p,observations,10);
+         threads_worker[i] = thread(call_from_thread,i,st_p,end_p,observations,10);
          }
 
   	
   	
        
-         // for (auto& th : threads_worker) {
-        //th.join();
-        //}
+          for (auto& th : threads_worker) {
+       		th.join();
+        }
 
-        //auto finish1 = chrono::high_resolution_clock::now();
-	//chrono::duration<double> elapsed2 = finish1 - start1;
-	//cout << "Elapsed time: " << elapsed2.count() << " s\n";
-    //    cout << "parallel computation GLOBAL solution 1:";
-  //for(i=0;i<N_CENTROIDS;++i)
-    //{
-      // for(k=0;k<N_DIMENSIONS;++k)
-       //{
-       	//	cout << cent[i].get_dimensions()[k] << "|";
-       //}
-       //cout << "\n";
+        auto finish2 = chrono::high_resolution_clock::now();
+	chrono::duration<double> elapsed2 = finish2 - start2;
+	cout << "Elapsed time: " << elapsed2.count() << " s\n";
+
+  auto start3 = std::chrono::high_resolution_clock::now();
+  fast_flow_parallel_reduce(observations,centroid_fastflow,10);
+  auto finish3 = chrono::high_resolution_clock::now();
+  chrono::duration<double> elapsed3 = finish3 - start3;
+  cout << "Elapsed time fastflow: " << elapsed3.count() << " s\n";  
+  //cout << "centroid_fastflow\n";
+ 
+//    for(i=0;i<N_CENTROIDS;++i)
+  //  {
+//       for(k=0;k<N_DIMENSIONS;++k)
+    //   {
+      // 		cout << centroid_fastflow[i].get_dimensions()[k] << "|";
+    //   }
+      // cout << "\n";
     //}
-  
  
   
   
